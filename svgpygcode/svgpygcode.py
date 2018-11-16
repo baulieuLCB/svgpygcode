@@ -50,18 +50,41 @@ class Machining:
             arguments:
                 - priority:[str] same as in self.calculate
         '''
-        for i in range (0, len(self.contours)):
-            self.order.append(i)
+        position = self.current_position
+        for el in self.contours:
+            el[1] = self.parse_path(el[1])
+        # WARNING : does not take count of priority yet
+        while len(self.order) < len(self.contours):
+            # look for the closest contour not already queued, and append it index to the list
+            min_d = -1
+            index = 0
+            for i in range(0, len(self.contours)):
+                if i not in self.order:
+                    if min_d == -1:
+                        min_d = self.min_distance(self.contours[i][1], position)
+                        index = i
+                    elif min_d > self.min_distance(self.contours[i][1], position):
+                        min_d = self.min_distance(self.contours[i][1], position)
+                        index = i
+            self.order.append(index)
+            # change the current position
+            closest_index = self.closest_index(self.contours[index][1], position)
+            if self.contours[index][1][closest_index][0] in ['M', 'L']:
+                position = [self.contours[index][1][closest_index][1][0], self.contours[index][1][closest_index][1][1]]
+            elif self.contours[index][1][closest_index][0] in ['A']:
+                position = [self.contours[index][1][closest_index][1][5], self.contours[index][1][closest_index][1][6]]
+        # for i in range (0, len(self.contours)):
+        #     self.order.append(i)
 
-    def profile(self, svg_path, type, properties):
+    def profile(self, profile, type, properties):
         '''
         Determines the gcode string for a profile cut.
             arguments:
-                - svg_path:str 'd' attribute of your path component
+                - profile:[] list of line / elliptic arc / bezier elements.
                 - operation_type:str description of the operation : 'profile_inside', 'profile_outside', 'pocket_inside', 'pocket_outside', 'engraving'
                 - properties:dict contains the machining characteristics : target_depth, cut_feedrate, plunge_feedrate, drill_type, drill_radius, depth_increment, stock_surface, clearance_pane, holding_tabs_height, holding_tabs_number, holding_tabs_width
         '''
-        profile = self.parse_path(svg_path)
+        # profile = self.parse_path(svg_path)
         properties = self.define_properties(properties)
 
         # searching for the closest point from current position
@@ -105,15 +128,15 @@ class Machining:
             self.current_position = [float(profile[closest_index][1][5]), float(profile[closest_index][1][6])]
         self.gcode += temp
 
-    def pocket(self, svg_path, type, properties):
+    def pocket(self, profile, type, properties):
         '''
         Determines the gcode string for a pocket cut.
             arguments:
-                - svg_path:str 'd' attribute of your path component
+                - svg_path:[] list of line / elliptic arc / bezier elements.
                 - operation_type:str description of the operation : 'profile_inside', 'profile_outside', 'pocket_inside', 'pocket_outside', 'engraving'
                 - properties:dict contains the machining characteristics : target_depth, cut_feedrate, plunge_feedrate, drill_type, drill_radius, depth_increment, stock_surface, clearance_pane, holding_tabs_height, holding_tabs_number, holding_tabs_width
         '''
-        profile = self.parse_path(svg_path)
+        # profile = self.parse_path(svg_path)
         properties = self.define_properties(properties)
 
         # searching for the closest point from current position
@@ -157,11 +180,11 @@ class Machining:
             self.current_position = [profile[closest_index][1][5], profile[closest_index][1][6]]
         self.gcode += temp
 
-    def engraving(self, svg_path, type, properties):
+    def engraving(self, profile, type, properties):
         '''
         Determines the gcode string for an engraving cut.
             arguments:
-                - svg_path:str 'd' attribute of your path component
+                - profile:[] list of line / elliptic arc / bezier elements.
                 - operation_type:str description of the operation : 'profile_inside', 'profile_outside', 'pocket_inside', 'pocket_outside', 'engraving'
                 - properties:dict contains the machining characteristics : target_depth, cut_feedrate, plunge_feedrate, drill_type, drill_radius, depth_increment, stock_surface, clearance_pane, holding_tabs_height, holding_tabs_number, holding_tabs_width
         '''
@@ -205,8 +228,6 @@ class Machining:
                 d = math.sqrt((float(position[0]) - float(profile[i][1][0]))**2 + (float(position[1]) - float(profile[i][1][1]))**2)
             elif profile[i][0] == 'A':
                 d = math.sqrt((float(position[0]) - float(profile[i][1][5]))**2 + (float(position[1]) - float(profile[i][1][6]))**2)
-            else:
-                print(profile[i][0])
             if min_d == -1:
                 min_d = d
                 closest_index = i
@@ -214,6 +235,25 @@ class Machining:
                 min_d = d
                 closest_index = i
         return closest_index
+
+    def min_distance(self, profile, position):
+        '''
+        Returns the minimal distance between the given position and the given contour.
+            arguments:
+                - profile:list parsed svg path (cf self.parse_path)
+                - position:[float, float] coordinates in 2D or a point
+        '''
+        min_d = -1
+        for i in range(0, len(profile)):
+            if profile[i][0] in ['M', 'L']:
+                d = math.sqrt((float(position[0]) - float(profile[i][1][0]))**2 + (float(position[1]) - float(profile[i][1][1]))**2)
+            elif profile[i][0] == 'A':
+                d = math.sqrt((float(position[0]) - float(profile[i][1][5]))**2 + (float(position[1]) - float(profile[i][1][6]))**2)
+            if min_d == -1:
+                min_d = d
+            elif d < min_d:
+                min_d = d
+        return min_d
 
     def define_properties(self, properties):
         '''
@@ -241,5 +281,4 @@ class Machining:
         # depth increment should always be negative
         if result['depth_increment'] > 0:
             result['depth_increment'] = -1 * result['depth_increment']
-
         return result

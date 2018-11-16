@@ -25,7 +25,7 @@ for path in path_strings:
 
 machining.calculate()
 
-print(machining.gcode)
+# print(machining.gcode)
 
 file = open(os.path.join('/Users/baulieu/scripts/libraries/svgpygcode/svgpygcode/', 'result.nc'), 'w+')
 file.write(machining.gcode)
