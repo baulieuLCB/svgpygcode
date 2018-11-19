@@ -112,14 +112,25 @@ class Machining:
                 temp = """G1 X{} Y{} Z{}\n""".format(profile[closest_index][1][5], profile[closest_index][1][6], depth)
             self.gcode += temp
             # go through the profile
+            temp = ""
             for index in range(0, len(profile)):
                 # true index to work with : we are going to
                 i = (index + closest_index + 1)%len(profile)
                 if profile[i][0] in ['M', 'L']:
-                    temp = """G1 X{} Y{} Z{}\n""".format(profile[i][1][0], profile[i][1][1], depth)
+                    temp += """G1 X{} Y{} Z{}\n""".format(profile[i][1][0], profile[i][1][1], depth)
                 if profile[i][0] == 'A':
-                    temp = """G1 X{} Y{} Z{}\n""".format(profile[i][1][5], profile[i][1][6], depth)
-                self.gcode += temp
+                    if profile[i-1][0] == 'A':
+                        arc = self.arc_to_circle(profile[i-1][1][5], profile[i-1][1][6], profile[i][1])
+                        cx = arc['cx'] - float(profile[i-1][1][5])
+                        cy = arc['cy'] - float(profile[i-1][1][6])
+                    elif profile[i-1][0] in ['M', 'L']:
+                        arc = self.arc_to_circle(profile[i-1][1][0], profile[i-1][1][1], profile[i][1])
+                        cx = arc['cx'] - float(profile[i-1][1][0])
+                        cy = arc['cy'] - float(profile[i-1][1][1])
+                    temp += """G{} X{} Y{} I{} J{}\n""".format(3 if arc['clockwise'] else 2,profile[i][1][5], profile[i][1][6], cx, cy)
+                    # temp = """G1 X{} Y{} Z{}\n""".format(profile[i][1][5], profile[i][1][6], depth)
+            self.gcode += temp
+            temp = ""
         if profile[closest_index][0] in ['M', 'L']:
             temp += """G0 X{} Y{} Z{}\n""".format(profile[closest_index][1][0], profile[closest_index][1][1], properties['clearance_pane'])
             self.current_position = [profile[closest_index][1][0], profile[closest_index][1][1]]
@@ -164,14 +175,24 @@ class Machining:
                 temp = """G1 X{} Y{} Z{}\n""".format(profile[closest_index][1][5], profile[closest_index][1][6], depth)
             self.gcode += temp
             # go through the profile
+            temp = ""
             for index in range(0, len(profile)):
                 # true index to work with : we are going to
                 i = (index + closest_index + 1)%len(profile)
                 if profile[i][0] in ['M', 'L']:
-                    temp = """G1 X{} Y{} Z{}\n""".format(profile[i][1][0], profile[i][1][1], depth)
+                    temp += """G1 X{} Y{} Z{}\n""".format(profile[i][1][0], profile[i][1][1], depth)
                 if profile[i][0] == 'A':
-                    temp = """G1 X{} Y{} Z{}\n""".format(profile[i][1][5], profile[i][1][6], depth)
-                self.gcode += temp
+                    if profile[i-1][0] == 'A':
+                        arc = self.arc_to_circle(profile[i-1][1][5], profile[i-1][1][6], profile[i][1])
+                        cx = arc['cx'] - float(profile[i-1][1][5])
+                        cy = arc['cy'] - float(profile[i-1][1][6])
+                    elif profile[i-1][0] in ['M', 'L']:
+                        arc = self.arc_to_circle(profile[i-1][1][0], profile[i-1][1][1], profile[i][1])
+                        cx = arc['cx'] - float(profile[i-1][1][0])
+                        cy = arc['cy'] - float(profile[i-1][1][1])
+                    temp += """G{} X{} Y{} I{} J{}\n""".format(3 if arc['clockwise'] else 2, profile[i][1][5], profile[i][1][6], cx, cy)
+            self.gcode += temp
+            temp = ""
         if profile[closest_index][0] in ['M', 'L']:
             temp += """G0 X{} Y{} Z{}\n""".format(profile[closest_index][1][0], profile[closest_index][1][1], properties['clearance_pane'])
             self.current_position = [profile[closest_index][1][0], profile[closest_index][1][1]]
@@ -282,3 +303,122 @@ class Machining:
         if result['depth_increment'] > 0:
             result['depth_increment'] = -1 * result['depth_increment']
         return result
+
+    def arc_to_circle(self, x1, y1, profile):
+        '''
+        Translates an elliptic arc to a gcode circle (main difficulty : the center)
+            arguments:
+                - x1:float x coordinate of the starting point
+                - x2:float y coordinate of the starting point
+                - profile:list list of arguments defining the arc [rx, ry, phi, fA, fS, x2, y2]
+        '''
+        fS = float(profile[4])
+        rx = float(profile[0])
+        ry = float(profile[1])
+        x1 = float(x1)
+        y1 = float(y1)
+
+        PIx2 = math.pi * 2
+        if rx < 0:
+            rx = -rx
+        if ry < 0:
+            ry = -ry
+        if rx == 0 or ry == 0:
+            raise ValueError('0 given for an arc definition rx or ry')
+
+        s_phi = math.sin(float(profile[2]))
+        c_phi = math.cos(float(profile[2]))
+        hd_x = (x1 - float(profile[5])) / 2
+        hd_y = (y1 - float(profile[6])) / 2
+        hs_x = (x1 + float(profile[5])) / 2
+        hs_y = (y1 + float(profile[6])) / 2
+
+        x1_ = c_phi * hd_x + s_phi * hd_y
+        y1_ = c_phi * hd_y - s_phi * hd_x
+
+        lambd = (x1_**2)/(rx**2) + (y1_**2)/(ry**2)
+        if lambd > 1:
+            rx = rx * math.sqrt(lambd)
+            ry = ry * math.sqrt(lambd)
+
+        rxry = rx * ry
+        rxy1_ = rx * y1_
+        ryx1_ = ry * x1_
+        sum_of_sq = (rxy1_**2) + (ryx1_**2)
+        coe = math.sqrt(abs((rxry**2 - sum_of_sq) / sum_of_sq))
+        if float(profile[3]) == float(profile[4]):
+            coe = -coe
+
+        cx_ = coe * rxy1_ / ry
+        cy_ = -coe * ryx1_ / rx
+
+        cx = c_phi * cx_ - s_phi * cy_ + hs_x
+        cy = s_phi * cx_ + c_phi * cy_ + hs_y
+
+        xcr1 = (x1_ - cx_) / rx
+        xcr2 = (x1_ + cx_) / rx
+        ycr1 = (y1_ - cy_) / ry
+        ycr2 = (y1_ + cy_) / ry
+
+        startAngle = self.radian(1.0, 0.0, xcr1, ycr1)
+        deltaAngle = self.radian(xcr1, ycr1, -xcr2, -ycr2)
+        while deltaAngle > PIx2:
+            deltaAngle -= PIx2
+        while deltaAngle < 0:
+            deltaAngle += PIx2
+        if fS == False or fS == 0:
+            deltaAngle -= PIx2
+        endAngle = startAngle + deltaAngle
+        while endAngle > PIx2:
+            endAngle -= PIx2
+        while endAngle < 0:
+            endAngle += PIx2
+
+        outputObj = {
+        'cx' : cx,
+        'cy' : cy,
+        'startAngle' : startAngle,
+        'deltaAngle' : deltaAngle,
+        'endAngle' : endAngle,
+        'clockwise' : (fS == True or fS == 1)
+        }
+
+        return outputObj
+
+    def radian(self, ux, uy, vx, vy):
+        '''
+        Returns the radian angle between two vectors
+            arguments:
+            - ux:float x coordinates of the u vector
+            - uy:float y coordinates of the u vector
+            - vx:float x coordinates of the v vector
+            - vy:float y coordinates of the v vector
+        '''
+        dot = ux * vx + uy * vy
+        mod = math.sqrt(( ux**2 + uy**2) * (vx**2 + vy**2))
+        rad = math.acos( dot / mod)
+        if ux * vy - uy * vx < 0.0:
+            rad = -rad
+        return rad
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# dfsdjflksdjl
