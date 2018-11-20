@@ -73,8 +73,6 @@ class Machining:
                 position = [self.contours[index][1][closest_index][1][0], self.contours[index][1][closest_index][1][1]]
             elif self.contours[index][1][closest_index][0] in ['A']:
                 position = [self.contours[index][1][closest_index][1][5], self.contours[index][1][closest_index][1][6]]
-        # for i in range (0, len(self.contours)):
-        #     self.order.append(i)
 
     def profile(self, profile, type, properties):
         '''
@@ -86,6 +84,9 @@ class Machining:
         '''
         # profile = self.parse_path(svg_path)
         properties = self.define_properties(properties)
+
+        # modifying the path to integrate holding tabs
+        profile = self.add_holding_tabs(profile, properties['holding_tabs_number'], properties['holding_tabs_width'], properties['holding_tabs_height'])
 
         # searching for the closest point from current position
         closest_index = self.closest_index(profile, self.current_position)
@@ -116,18 +117,21 @@ class Machining:
             for index in range(0, len(profile)):
                 # true index to work with : we are going to
                 i = (index + closest_index + 1)%len(profile)
-                if profile[i][0] in ['M', 'L']:
+                if profile[i][0] in ['M', 'L', 'HTD']:
                     temp += """G1 X{} Y{} Z{}\n""".format(profile[i][1][0], profile[i][1][1], depth)
                 if profile[i][0] == 'A':
                     if profile[i-1][0] == 'A':
                         arc = self.arc_to_circle(profile[i-1][1][5], profile[i-1][1][6], profile[i][1])
                         cx = arc['cx'] - float(profile[i-1][1][5])
                         cy = arc['cy'] - float(profile[i-1][1][6])
-                    elif profile[i-1][0] in ['M', 'L']:
+                    elif profile[i-1][0] in ['M', 'L', 'HTD']:
                         arc = self.arc_to_circle(profile[i-1][1][0], profile[i-1][1][1], profile[i][1])
                         cx = arc['cx'] - float(profile[i-1][1][0])
                         cy = arc['cy'] - float(profile[i-1][1][1])
                     temp += """G{} X{} Y{} I{} J{}\n""".format(3 if arc['clockwise'] else 2,profile[i][1][5], profile[i][1][6], cx, cy)
+                elif profile[i][0] == 'HTU':
+                    ht_depth = depth if depth > properties['target_depth'] + properties['holding_tabs_height'] else properties['target_depth'] + properties['holding_tabs_height']
+                    temp += """G1 X{} Y{} Z{}\n""".format(profile[i][1][0], profile[i][1][1], ht_depth)
                     # temp = """G1 X{} Y{} Z{}\n""".format(profile[i][1][5], profile[i][1][6], depth)
             self.gcode += temp
             temp = ""
@@ -400,6 +404,127 @@ class Machining:
         if ux * vy - uy * vx < 0.0:
             rad = -rad
         return rad
+
+    def add_holding_tabs(self, profile, holding_tabs_number, holding_tabs_width, holding_tabs_height ):
+        profile_length = 0
+        for i in range(1, len(profile)):
+            profile_length += self.curve_length(profile[i], profile[i-1])
+        spacing = profile_length / (holding_tabs_number + 1) *1/2
+
+        # browsing the list to find where to place the holding holding tabs (curve must be longer than holding_tabs_width)
+        # every time we find one -> cut the curve and add two lines in between : one HTU (holding tab up), one HTD (I don't know what that means)
+        d = 0
+        it = 1
+        i = 1
+        while i < len(profile): # the length of profile is going to change (holding tabs insertion, my darling)
+            ratio = 1
+            l = self.curve_length(profile[i], profile[i-1])
+            if d + l > it * spacing and l > holding_tabs_width and l > 30:
+                # this is a good place to insert a sweet holding tab.
+                curve = profile[i]
+                previousCurve = profile[i-1]
+                if previousCurve[0] in ['A']:
+                    startX = float(previousCurve[1][5])
+                    startY = float(previousCurve[1][6])
+                elif previousCurve[0] in ['M', 'L', 'HTD', 'HTU']:
+                    startX = float(previousCurve[1][0])
+                    startY = float(previousCurve[1][1])
+                else:
+                    startX = 0
+                    startY = 0
+
+                # first case : the current curve is a line
+                if curve[0] in ['M', 'L', 'HTD']: # M should never happend, as we begin with the index 1. anyway, this is the simple case
+                    ratio = ratio = (it * spacing - d)/l
+                    if ratio > 0.8:
+                        ratio = 0.8
+                    elif ratio < 0.2:
+                        ratio = 0.2
+                    endX = float(curve[1][0])
+                    endY = float(curve[1][1])
+                    cX = startX + (endX - startX) * ratio # x position of the cut -> for now = center ->CHANGE for ratio (it * spacing - (d + l)) / l
+                    cY = startY + (endY - startY) * ratio # y position of the cut -> for now = center
+                    ht_startX = cX - (cX - startX) * float(holding_tabs_width) / (2 * math.sqrt((cX - startX)**2 + (cY - startY)**2))
+                    ht_startY = cY - (cY - startY) * float(holding_tabs_width) / (2 * math.sqrt((cX - startX)**2 + (cY - startY)**2))
+                    ht_endX = cX - (cX - endX) * float(holding_tabs_width) / (2 * math.sqrt((cX - endX)**2 + (cY - endY)**2))
+                    ht_endY = cY - (cY - endY) * float(holding_tabs_width) / (2 * math.sqrt((cX - endX)**2 + (cY - endY)**2))
+                    # we are going to change the current line to start -> ht_start and insert three new elements : HTU, HTD and ht_end -> end
+                    # changing the current line
+                    profile[i][1][0] = ht_startX
+                    profile[i][1][1] = ht_startY
+                    # inserting HTU
+                    profile.insert(i + 1, ['HTU', [cX, cY]])
+                    # inserting HTD
+                    profile.insert(i + 2, ['HTD', [ht_endX, ht_endY]])
+                    # inserting the end of the line
+                    profile.insert(i + 3, ['L', [endX, endY]])
+                    # shifting the index to the right position
+                    i += 2
+                    it += 1
+
+
+                # second case : the current curve is an arc
+                if curve[0] in ['A']: # this is the difficult case.
+                    circle = self.arc_to_circle(startX, startY, curve[1])
+                    ratio = (it * spacing - d)/l # (d + l - it*spacing) / l
+                    if ratio > 0.9: # can happen because we use a nasty approximation for curve length, and is useful if the HT is too close to a joint
+                        ratio = 0.8
+                    if ratio < 0.1:
+                        ratio = 0.2
+                    endX = float(curve[1][5])
+                    endY = float(curve[1][6])
+                    s = -1
+                    if circle['clockwise']:
+                        s = -s
+                    cX = circle['cx'] + float(curve[1][0]) * math.cos(circle['startAngle'] + circle['deltaAngle'] * ratio)
+                    cY = circle['cy'] + float(curve[1][0]) * math.sin(circle['startAngle'] + circle['deltaAngle'] * ratio)
+                    ht_startAngle = circle['deltaAngle'] * ratio - float(holding_tabs_width)/ (2 * float(curve[1][0]))
+                    ht_endAngle = circle['deltaAngle'] * ratio + float(holding_tabs_width)/ (2 * float(curve[1][0]))
+                    ht_startX = circle['cx'] + float(curve[1][0]) * math.cos(circle['startAngle'] + ht_startAngle)
+                    ht_startY = circle['cy'] + float(curve[1][0]) * math.sin(circle['startAngle'] + ht_startAngle)
+                    ht_endX = circle['cx'] + float(curve[1][0]) * math.cos(circle['startAngle'] + ht_endAngle)
+                    ht_endY = circle['cy'] + float(curve[1][0]) * math.sin(circle['startAngle'] + ht_endAngle)
+                    # we are going to change the current arc to a new arc start -> ht_Start and insert three new elements : HTU, HTD and a new arc ht_end -> end
+                    # changing the current arc
+                    profile[i][1][5] = ht_startX
+                    profile[i][1][6] = ht_startY
+                    # inserting HTU
+                    profile.insert(i + 1, ['HTU', [cX, cY]])
+                    # inserting HTD
+                    profile.insert(i + 2, ['HTD', [ht_endX, ht_endY]]) # ht_endX, ht_endY]])
+                    # inserting the second arc
+                    profile.insert(i + 3, ['A', [curve[1][0], curve[1][1], curve[1][2], curve[1][3], curve[1][4], endX, endY]])
+                    # shifting the index to the right position
+                    i += 2
+                    it += 1
+            i+=1
+            d += l*ratio
+
+
+        return profile
+
+    def curve_length(self, curve, previousCurve):
+        length = 0
+
+        # determining the starting point of the curve
+        if previousCurve[0] in ['M', 'L', 'HTU', 'HTD']:
+            startX = previousCurve[1][0]
+            startY = previousCurve[1][1]
+        elif previousCurve[0] in ['A']:
+            startX = previousCurve[1][5]
+            startY = previousCurve[1][6]
+
+        if curve[0] in ['M', 'L']:
+            # just calculate the distance between the two points #WOWengineering #Ishoulddothiswithmachinelearningandblockchain
+            length = math.sqrt((float(curve[1][0]) - float(startX))**2 + (float(curve[1][1]) - float(startY))**2)
+        elif curve[0] in ['A']:
+            circle = self.arc_to_circle(startX, startY, curve[1])
+            length = float(curve[1][0]) * circle['deltaAngle']
+            # for now we'll do with the awful approximation length = PI*r (most arcs are half circles for me) #Imalazyf**k
+            # length = math.pi * math.sqrt((float(curve[1][5]) - float(startX))**2 + (float(curve[1][6]) - float(startY))**2) / 2
+
+        return length
+
 
 
 
