@@ -1,6 +1,7 @@
 # svgpygcode
 
 import math
+from decimal import Decimal
 
 class Machining:
     def __init__(self):
@@ -525,9 +526,218 @@ class Machining:
 
         return length
 
+    def offset_curve(self, input_profile, distance, direction):
+        """
+        Returns a list of svg paths with parallels  to the profile path, offseted by the value of distance and in the given direction.
+        As the purpose of this function is to fill pockets, self_intersecting paths will be broken and selected.
+            Arguments:
+                - profile:list svg path (defined as [['type', [coordinates]]])
+                - distance:float distance from the profile to the result
+                - direction:str can be 'inside' or 'outside'
+        """
+        r = distance
+        # the first element of the path should be 'M' (which means Move: used to set the beginning of the path.)
+        # this point is also the end of the last path element, if the path is closed. As we always consider paths to be closed, we delete this element.
+        profile = input_profile[1:] if input_profile[0][0] == 'M' else input_profile
 
+        # determine the direction of the path (clockwise or counter-clockwise)
+        cw = 0
+        calc_cw = 0
+        for i in range(0, len(profile)):
+            j = (i - 1) % len(profile)
+            sx = profile[j][1][0] if profile[j][0] in ['M', 'L'] else profile[j][1][5]
+            sy = profile[j][1][1] if profile[j][0] in ['M', 'L'] else profile[j][1][6]
+            ex = profile[i][1][0] if profile[i][0] in ['M', 'L'] else profile[i][1][5]
+            ey = profile[i][1][1] if profile[i][0] in ['M', 'L'] else profile[i][1][6]
+            calc_cw += (ex - sx) * (ey + sy)
+        cw = True if calc_cw > 0 else False
+        od = 1 # od means offset direction
+        if cw:
+            od = -od
+        if direction == "inside":
+            od = -od
+        raw_offset = []
+        for i in range(0, len(profile)):
+            # for each node, determine the angle between both incoming and outing tangent
+            pc = profile[(i - 1)%len(profile)] # previous curve
+            c = profile[i] # curve
+            nc = profile[(i + 1)%len(profile)] # next curve
+            ##pp = self.get_point_from_curve(pc) # previous point
+            p = self.get_point_from_curve(c) # point
+            # np = self.get_point_from_curve(nc) # next point -> WARNING : if curve is an arc, we have to use the tangent, not the line !!!!!
+            # for the next points, it's a bit different : if the curve is a line, we just have to use its ending point.
+            # However, if the curve is an arc, we have to use the tangent of the curve...
+            # (for pc : the qestion is if the current curve is an arc or a line) (this paragraph is a pure mindf**k)
+            if nc[0] in ['M', 'L']:
+                np = self.get_point_from_curve(nc)
+            else:
+                np = self.get_point_tangent_arc(nc, p, 'start')
+            if c[0] in ['M', 'L']:
+                pp = self.get_point_from_curve(pc)
+            else:
+                pp = self.get_point_tangent_arc(c, self.get_point_from_curve(pc), 'end')
+            cpp = self.get_point_from_curve(pc) # will be used for clockwise determination
+            cnp = self.get_point_from_curve(nc) # will be used for clockwise determination
+            # we define two vectors : u is the vector p-pp, v is the vector p-np
+            u = [pp[0] - p[0], pp[1] - p[1]]
+            v = [np[0] - p[0], np[1] - p[1]]
+            u_len = math.sqrt(u[0]**2 + u[1]**2)
+            v_len = math.sqrt(v[0]**2 + v[1]**2)
+            angle = math.acos((u[0] * v[0] + u[1] * v[1]) / (u_len * v_len))
+            # now we have the angle between the two vectors. To know if the oriented angle is this one or 2*PI - angle, we have to check for this sub_profile's direction.
+            # easy my friend : we calculate its clockwise value and check if it's equal to cw.
+            # sub_cw = (p[0] - cpp[0]) * (p[1] + cpp[1]) + (cnp[0] - p[0]) * (cnp[1] + p[1]) + (cpp[0] - cnp[0]) * (cpp[1] + cnp[1])
+            sub_cw = (p[0] - pp[0]) * (p[1] + pp[1]) + (np[0] - p[0]) * (np[1] + p[1]) + (pp[0] - np[0]) * (pp[1] + np[1])
+            # if (sub_cw > 0) != cw:
+            #     angle = 2 * math.pi - angle
+            if (sub_cw > 0) == cw and direction == 'outside':
+                angle = 2 * math.pi - angle
+            if (sub_cw > 0) != cw and direction == 'inside':
+                angle = 2 * math.pi - angle
+            print("{}   {}   {}   {}   {}   {}".format(angle/math.pi, cw, sub_cw, pp, p, np))
+            # add a new point and the corresponding curve.
+            # anyway, we need the angle between the previous line and the X axis. We'll call it beta
+            p_len = math.sqrt((p[0] - pp[0])**2 + (p[1] - pp[1])**2)
+            beta = self.guess_angle((p[1] - pp[1]) / p_len, (p[0] - pp[0]) / p_len)
+            if angle > math.pi:
+                # endpoint is the original offset of the point.
+                # ax = p[0] + math.cos(math.pi - beta - math.pi / 2) * r
+                # ay = p[1] + math.sin(math.pi - beta - math.pi / 2) * r
+                ax = p[0] + math.cos(beta - od * math.pi / 2) * r
+                ay = p[1] + math.sin(beta - od * math.pi / 2) * r
+                if c[0] == 'A':
+                    # raw_offset.append(['L', [ax, ay]])
+                    radius_dir = self.radius_dir(c[1][4], direction, cw)
+                    raw_offset.append(['A', [abs(c[1][0] + radius_dir * r), abs(c[1][1] + radius_dir * r), c[1][2], c[1][3], c[1][4], ax, ay]])
+                else:
+                    raw_offset.append([c[0], [ax, ay]])
+                # Then insert a new point orthogonally offset from the same point to the second tangent
+                p_len2 = math.sqrt((np[0] - p[0])**2 + (np[1] - p[1])**2)
+                beta2 = self.guess_angle((np[1] - p[1]) / p_len2, (np[0] - p[0]) / p_len2)
+                bx = p[0] + math.cos(beta2 - od * math.pi / 2) * r
+                by = p[1] + math.sin(beta2 - od * math.pi / 2) * r
+                # bx = p[0] + math.cos(beta - od * math.pi / 2 + angle) * r
+                # by = p[1] + math.sin(beta - od * math.pi / 2 + angle) * r
+                # raw_offset.append(['L', [bx, by]])
+                raw_offset.append(['A', [r, r, 0, 0, 0 if cw else 1, bx, by]])
+            else:
+                # endpoint is the offset of p on the bisectrix of the two vectors
+                # ax = p[0] - math.cos(math.pi - beta - angle / 2) * r / math.sin(angle / 2)
+                # ay = p[1] - math.sin(math.pi - beta - angle / 2) * r / math.sin(angle / 2)
+                ax = p[0] - math.cos(beta + od * angle / 2) * r / math.sin(angle / 2)
+                ay = p[1] - math.sin(beta + od * angle / 2) * r / math.sin(angle / 2)
+                if c[0] == 'A':
+                    # raw_offset.append(['L', [ax, ay]])
+                    radius_dir = self.radius_dir(c[1][4], direction, cw)
+                    raw_offset.append(['A', [abs(c[1][0] + radius_dir * r), abs(c[1][1] + radius_dir * r), c[1][2], c[1][3], c[1][4], ax, ay]])
+                else:
+                    raw_offset.append([c[0], [ax, ay]])
+        # we defined a closed loop. to use it as an SVG, we have to add a 'M' element at the beginning, that will point to the last point
+        raw_offset.insert(0, ['M', self.get_point_from_curve(raw_offset[-1])])
+        raw_offset = self.clean(raw_offset) # rounding every float to avoid scientific notation
+        return raw_offset
 
+    def guess_angle(self, sin, cos):
+        """
+        I didn't know how precise the arcos and arcsin function are, so I decided not to take any risk.
+        Please don't judge me.
+            Arguments:
+                - cos:float cosinus of the angle
+                - sin:float Avogadro's number divided by the number of days until the next full moon
+        """
+        c = math.acos(cos)
+        s = math.asin(sin)
+        return abs(c) if s > 0 else -abs(c)
 
+    def get_point_from_curve(self, curve):
+        """
+        Returns the 2D coordinates of the given curve's ending point.
+        Necessary because the coordinates indexes depend on the curve's nature.
+            Arguments:
+                - curve:list curve defined in a standard way : ['type', ['properties']]
+        """
+        result = []
+        if curve[0] in ['M', 'L', 'HTD', 'HTU']: # the curve is a line (or a movement, or a holding tab, which is exactly the same)
+            result = [curve[1][0], curve[1][1]]
+        else: # the curve is an arc (in which case the coordinates are stored in 5th and 6th position in the curve properties list)
+            result = [curve[1][5], curve[1][6]]
+        return result
+
+    def get_point_tangent_arc(self, curve, sp, position):
+        """
+        Returns the 2D coordinates of a point which will define the tangent to the arc on the origin or end point, in the same direction as the arc itself.
+            Arguments :
+                - curve:list curve defined in a standard way : ['type', ['properties']]
+                - sp:list 2D coordinates of the arc_s starting point
+                - position:str can be 'start' or 'end'
+        """
+        # strategy :
+        #   - find the center of the arc
+        #   - calculate the angle alpha between the Ox axis and the center-startpoint segment -> the angle between the tangent and Ox is alpha - PI/2
+        #   - calculate the tangent point (we'll call it a) position with radial coordinates
+        circle = self.arc_to_circle(sp[0], sp[1], curve[1])
+        c = [circle['cx'], circle['cy']]
+        if position == 'start':
+            # we have the circle center, now we calculate the vector coordinates, its length and its angle with Ox
+            u = [sp[0] - c[0], sp[1] - c[1]]
+            u_len = math.sqrt(u[0]**2 + u[1]**2)
+            u_cos = u[0] / u_len
+            u_sin = u[1] / u_len
+            alpha = self.guess_angle(u_sin, u_cos)
+            # calculate the position of a, given that the distance sp -> a is 10 (no reason for 10...)
+            dir = -1
+            if float(curve[1][4]) == 0:
+                dir = 1
+            a_x = sp[0] + 10 * math.cos(alpha - dir * math.pi / 2)
+            a_y = sp[1] + 10 * math.sin(alpha - dir * math.pi / 2)
+        else:
+            # we have the circle center, now we calculate the vector coordinates, its length and its angle with Ox
+            u = [curve[1][5] - c[0], curve[1][6] - c[1]]
+            u_len = math.sqrt(u[0]**2 + u[1]**2)
+            u_cos = u[0] / u_len
+            u_sin = u[1] / u_len
+            alpha = self.guess_angle(u_sin, u_cos)
+            # calculate the position of a, given that the distance sp -> a is 10 (no reason for 10...)
+            dir = -1
+            if float(curve[1][4]) == 0:
+                dir = 1
+            a_x = curve[1][5] + 10 * math.cos(alpha + dir * math.pi / 2)
+            a_y = curve[1][6] + 10 * math.sin(alpha + dir * math.pi / 2)
+        # print([sp[0], sp[1], curve[1][5], curve[1][6], a_x, a_y])
+        print()
+        print("AAAAAAAAAAAAAAAAAA           " + str(curve[1][0]))
+        return [a_x, a_y]
+
+    def radius_dir(self, sweep_flag, direction, cw):
+        """
+        Calculates if the radius of the new arc has to be superior or inferior to its reference.
+            Arguments:
+                - sweep_flag:int sweep_flag value of the circle (can be 0 or 1)
+                - direction:str can be 'inside' or 'outside'
+                - cw:bool clockwise or counter-clockwise
+        """
+        result = 1
+        temp = True
+        if float(sweep_flag) == 0 and cw == False:
+            temp = False
+        if float(sweep_flag) == 1 and cw == True:
+            temp = False
+        if direction == 'inside' and temp:
+            result = -1
+        if direction == 'outside' and temp == False:
+            result = -1
+        return result
+
+    def clean(self, profile):
+        """
+        Returns a clean version on profile, which means a version where every float is rounded to the 5th decimal, in order to avoid scientific writing
+            Arguments:
+                - profile:list profile defined as : [[type, [properties]]]
+        """
+        result = []
+        for el in profile:
+            result.append([el[0], [round(e, 6) for e in el[1]]])
+        return result
 
 
 
