@@ -543,7 +543,7 @@ class Machining:
         # determine the direction of the path (clockwise or counter-clockwise)
         cw = 0
         calc_cw = 0
-        for i in range(0, len(profile)):
+        for i in range(1, len(profile)): # first element is M, not to be considered...
             j = (i - 1) % len(profile)
             sx = profile[j][1][0] if profile[j][0] in ['M', 'L'] else profile[j][1][5]
             sy = profile[j][1][1] if profile[j][0] in ['M', 'L'] else profile[j][1][6]
@@ -562,9 +562,7 @@ class Machining:
             pc = profile[(i - 1)%len(profile)] # previous curve
             c = profile[i] # curve
             nc = profile[(i + 1)%len(profile)] # next curve
-            ##pp = self.get_point_from_curve(pc) # previous point
             p = self.get_point_from_curve(c) # point
-            # np = self.get_point_from_curve(nc) # next point -> WARNING : if curve is an arc, we have to use the tangent, not the line !!!!!
             # for the next points, it's a bit different : if the curve is a line, we just have to use its ending point.
             # However, if the curve is an arc, we have to use the tangent of the curve...
             # (for pc : the qestion is if the current curve is an arc or a line) (this paragraph is a pure mindf**k)
@@ -576,8 +574,6 @@ class Machining:
                 pp = self.get_point_from_curve(pc)
             else:
                 pp = self.get_point_tangent_arc(c, self.get_point_from_curve(pc), 'end')
-            cpp = self.get_point_from_curve(pc) # will be used for clockwise determination
-            cnp = self.get_point_from_curve(nc) # will be used for clockwise determination
             # we define two vectors : u is the vector p-pp, v is the vector p-np
             u = [pp[0] - p[0], pp[1] - p[1]]
             v = [np[0] - p[0], np[1] - p[1]]
@@ -588,25 +584,19 @@ class Machining:
             # easy my friend : we calculate its clockwise value and check if it's equal to cw.
             # sub_cw = (p[0] - cpp[0]) * (p[1] + cpp[1]) + (cnp[0] - p[0]) * (cnp[1] + p[1]) + (cpp[0] - cnp[0]) * (cpp[1] + cnp[1])
             sub_cw = (p[0] - pp[0]) * (p[1] + pp[1]) + (np[0] - p[0]) * (np[1] + p[1]) + (pp[0] - np[0]) * (pp[1] + np[1])
-            # if (sub_cw > 0) != cw:
-            #     angle = 2 * math.pi - angle
             if (sub_cw > 0) == cw and direction == 'outside':
                 angle = 2 * math.pi - angle
             if (sub_cw > 0) != cw and direction == 'inside':
                 angle = 2 * math.pi - angle
-            print("{}   {}   {}   {}   {}   {}".format(angle/math.pi, cw, sub_cw, pp, p, np))
             # add a new point and the corresponding curve.
             # anyway, we need the angle between the previous line and the X axis. We'll call it beta
             p_len = math.sqrt((p[0] - pp[0])**2 + (p[1] - pp[1])**2)
             beta = self.guess_angle((p[1] - pp[1]) / p_len, (p[0] - pp[0]) / p_len)
             if angle > math.pi:
                 # endpoint is the original offset of the point.
-                # ax = p[0] + math.cos(math.pi - beta - math.pi / 2) * r
-                # ay = p[1] + math.sin(math.pi - beta - math.pi / 2) * r
                 ax = p[0] + math.cos(beta - od * math.pi / 2) * r
                 ay = p[1] + math.sin(beta - od * math.pi / 2) * r
                 if c[0] == 'A':
-                    # raw_offset.append(['L', [ax, ay]])
                     radius_dir = self.radius_dir(c[1][4], direction, cw)
                     raw_offset.append(['A', [abs(c[1][0] + radius_dir * r), abs(c[1][1] + radius_dir * r), c[1][2], c[1][3], c[1][4], ax, ay]])
                 else:
@@ -616,26 +606,126 @@ class Machining:
                 beta2 = self.guess_angle((np[1] - p[1]) / p_len2, (np[0] - p[0]) / p_len2)
                 bx = p[0] + math.cos(beta2 - od * math.pi / 2) * r
                 by = p[1] + math.sin(beta2 - od * math.pi / 2) * r
-                # bx = p[0] + math.cos(beta - od * math.pi / 2 + angle) * r
-                # by = p[1] + math.sin(beta - od * math.pi / 2 + angle) * r
-                # raw_offset.append(['L', [bx, by]])
-                raw_offset.append(['A', [r, r, 0, 0, 0 if cw else 1, bx, by]])
+                arc_dir = 1
+                if cw and direction == 'outside':
+                    arc_dir = 0
+                if cw == False and direction == 'inside':
+                    arc_dir = 0
+                raw_offset.append(['A', [r, r, 0, 0, arc_dir, bx, by]])
             else:
                 # endpoint is the offset of p on the bisectrix of the two vectors
-                # ax = p[0] - math.cos(math.pi - beta - angle / 2) * r / math.sin(angle / 2)
-                # ay = p[1] - math.sin(math.pi - beta - angle / 2) * r / math.sin(angle / 2)
                 ax = p[0] - math.cos(beta + od * angle / 2) * r / math.sin(angle / 2)
                 ay = p[1] - math.sin(beta + od * angle / 2) * r / math.sin(angle / 2)
                 if c[0] == 'A':
-                    # raw_offset.append(['L', [ax, ay]])
                     radius_dir = self.radius_dir(c[1][4], direction, cw)
                     raw_offset.append(['A', [abs(c[1][0] + radius_dir * r), abs(c[1][1] + radius_dir * r), c[1][2], c[1][3], c[1][4], ax, ay]])
                 else:
                     raw_offset.append([c[0], [ax, ay]])
         # we defined a closed loop. to use it as an SVG, we have to add a 'M' element at the beginning, that will point to the last point
         raw_offset.insert(0, ['M', self.get_point_from_curve(raw_offset[-1])])
-        raw_offset = self.clean(raw_offset) # rounding every float to avoid scientific notation
+        # now, we break the profile in several sub_profile, breaking points are each auto-intersection point
+        raw_offset = self.break_profile(raw_offset, cw)
+        # we go through the list of sub_profiles and we remove the ones that don't have the same clockwise direction
+        raw_offset = self.remove_inverted_profiles(raw_offset, cw)
+        # we clean the profiles (technically, we round every float to avoid scientific notation...)
+        raw_offset = [self.clean(profile) for profile in raw_offset]
         return raw_offset
+
+    def break_profile(self, input_profile, cw):
+        """
+        Returns a list of non_autosecant profiles produced from the given profile. Each sub_profile that doesn't have the same clockwise value as cw is deleted
+        WARNING : ONLY WORKS FOR LINES INTERSECTION FOR NOW. if an arc intersects with anything else, I don't know yet how to catch it.
+            Arguments:
+                - profile:list profile svg path defined like this : [['type', [properties]]]
+        """
+        result = []
+        collision = True
+        # i = 0
+        # j = 0
+        # k = 0
+        result.append(input_profile)
+        while collision == True:
+            collision = False
+            k = 0
+            while k < len(result):
+                profile = result[k]
+                i = 0
+                j = 0
+                while collision == False and i < len(profile):
+                    if profile[i][0] in ['L']:
+                        j = i + 1
+                        while j < len(profile) and collision == False:
+                            if profile[i][0] in ['L']:
+                                previous_i = (i - 1) % len(profile)
+                                previous_j = (j - 1) % len(profile)
+                                s1 = self.get_point_from_curve(profile[previous_i])
+                                e1 = self.get_point_from_curve(profile[i])
+                                s2 = self.get_point_from_curve(profile[previous_j])
+                                e2 = self.get_point_from_curve(profile[j])
+                                intersect = self.do_they_intersect(s1, e1, s2, e2)
+                                if intersect != []: # the two lines intersect, and we have the coordinates of the intersection point
+                                    collision = True
+                                    # first : add the current path, just remove the other range and change the line at the i index to make it end at the intersection point
+                                    temp = profile[:i + 1] + profile[j:]
+                                    temp[i][1] = [intersect[0], intersect[1]]
+                                    result[k] = temp
+                                    # second : add an 'M' movement to the beginning of the path, and end the last element (index j-i) at the intersection point
+                                    temp2 = profile[i:j + 1]
+                                    temp2[j-i] = temp2[j-i].copy() # Necessary, to avoid modifying the other profile (python works with references, not copies of the lists) (man, it took me so long to spot this s**t...)
+                                    temp2[j-i][1] = [intersect[0], intersect[1]]
+                                    temp2.insert(0, ['M', [intersect[0], intersect[1]]])
+                                    result.append(temp2)
+                            j += 1
+                    i += 1
+                k += 1
+        return result
+
+    def remove_inverted_profiles(self, raw_offset, cw):
+        result = []
+        for profile in raw_offset:
+            calc_cw = 0
+            for i in range(1, len(profile)): # first element is M, not to be considered...
+                j = (i - 1) % len(profile)
+                sx = profile[j][1][0] if profile[j][0] in ['M', 'L'] else profile[j][1][5]
+                sy = profile[j][1][1] if profile[j][0] in ['M', 'L'] else profile[j][1][6]
+                ex = profile[i][1][0] if profile[i][0] in ['M', 'L'] else profile[i][1][5]
+                ey = profile[i][1][1] if profile[i][0] in ['M', 'L'] else profile[i][1][6]
+                calc_cw += (ex - sx) * (ey + sy)
+            if (calc_cw > 0) == cw:
+                result.append(profile)
+        return result
+
+    def do_they_intersect(self, s1, e1, s2, e2):
+        """
+        Returns the coordinates of the intersection point if the segments [s1, e1] and [s2, e2] intersect, [either]
+            Arguments:
+            - s1:list coordinates of the first segment's starting point in the format [x, y]
+            - e1:list coordinates of the first segment's ending point in the format [x, y]
+            - s2:list coordinates of the second segment's starting point in the format [x, y]
+            - e2:list coordinates of the second segment's ending point in the format [x, y]
+        """
+        result = []
+        if (self.ccw(s1,s2,e2) != self.ccw(e1,s2,e2) and self.ccw(s1,e1,s2) != self.ccw(s1,e1,e2)) and e1 != s2 and s1 != e2: # in this case, the segments intersect (don't ask me why, ask this guy : https://stackoverflow.com/questions/3838329/how-can-i-check-if-two-segments-intersect)
+            # we calculate the intersection's coordinates
+            # for this, we first have to calculate the coefficients of both segments equation
+            A1 = (e1[1] - s1[1]) / (e1[0] - s1[0] + 0.000001)
+            B1 = s1[1] - A1 * s1[0]
+            A2 = (e2[1] - s2[1]) / (e2[0] - s2[0] + 0.000001)
+            B2 = s2[1] - A2 * s2[0]
+            x = (B1 - B2) / (A2 - A1)
+            y = A1 * x + B1
+            result = [x, y]
+        return result
+
+    def ccw(self, A, B, C):
+        """
+        measure whereas the shape is counterlclockwise or not. only used for the line intersection detection
+            Arguments:
+                - A:list point in the format [x, y]
+                - B:list point in the format [x, y]
+                - C:list point in the format [x, y]
+        """
+        return (C[1]-A[1]) * (B[0]-A[0]) > (B[1]-A[1]) * (C[0]-A[0])
 
     def guess_angle(self, sin, cos):
         """
@@ -703,9 +793,6 @@ class Machining:
                 dir = 1
             a_x = curve[1][5] + 10 * math.cos(alpha + dir * math.pi / 2)
             a_y = curve[1][6] + 10 * math.sin(alpha + dir * math.pi / 2)
-        # print([sp[0], sp[1], curve[1][5], curve[1][6], a_x, a_y])
-        print()
-        print("AAAAAAAAAAAAAAAAAA           " + str(curve[1][0]))
         return [a_x, a_y]
 
     def radius_dir(self, sweep_flag, direction, cw):

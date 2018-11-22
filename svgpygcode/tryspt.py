@@ -93,7 +93,7 @@ for el in svg_path1:
         svg1 += "{} ".format(e)
 
 svg2 = ""
-svg_path2 = machining.offset_curve(svg_path1, 3, 'outside')
+svg_path2 = machining.offset_curve(svg_path1, 10, 'inside')[0]
 print("""
 ------------------
 """)
