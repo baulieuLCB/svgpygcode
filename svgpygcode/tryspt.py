@@ -52,7 +52,9 @@ svg_path1 = [
 ['L', [100, 100]],
 ]
 
-temp = "M 980.0 0.0  L 898.702 0.0  L 536.667 457.421  A 59.515 59.515 0 0 1 490.0 480.0  A 59.515 59.515 0 0 1 443.33299999999997 457.421  L 81.298 0.0  L 0.0 0.0  L 0.0 22.0  L 294.124 468.731  A 80.0 80.0 0 0 1 253.191 588.42  L 0.0 675.0  L 0.0 731.0  L 50.0 731.0  L 50.0 720.0  A 4.1 4.1 0 0 1 58.19999999999999 720.0  L 422.016 720.0  L 437.017 705.0  L 490.0 705.0  L 542.983 705.0  L 557.984 720.0  L 921.8 720.0  A 4.1 4.1 0 0 1 930.0 720.0  L 930.0 731.0  L 980.0 731.0  L 980.0 675.0  L 726.809 588.42  A 80.0 80.0 0 0 1 685.876 468.731  L 980.0 22.0  L 980.0 0.0z"
+temp = "M 980.0 0.0  L 898.702 0.0  L 536.667 457.421  A 59.515 59.515 0 0 1 490.0 480.0  A 59.515 59.515 0 0 1 443.33299999999997 457.421  L 81.298 0.0  L 0.0 0.0  L 0.0 22.0  L 294.124 468.731  A 80.0 80.0 0 0 1 253.191 588.42  L 0.0 675.0  L 0.0 731.0  L 50.0 731.0  L 50.0 720.0  A 4.1 4.1 0 0 1 58.19999999999999 720.0  L 422.016 720.0  L 437.017 705.0  L 490.0 705.0  L 542.983 705.0  L 557.984 720.0  L 921.8 720.0  A 4.1 4.1 0 0 1 930.0 720.0  L 930.0 731.0  L 980.0 731.0  L 980.0 675.0  L 726.809 588.42  A 80.0 80.0 0 0 1 685.876 468.731  L 980.0 22.0  L 980.0 0.0"
+
+# temp = "M 907.5 720.0  L 907.5 685.0  A 4.1 4.1 0 0 0 899.3 685.0  L 880.1859999999999 685.0  A 4.1 4.1 0 0 0 872.0 685.336  L 873.0 697.5  L 872.0 710.0  L 872.0 720.0  L 907.5 720.0"
 
 temp1 = []
 t1 = ""
@@ -65,9 +67,12 @@ for char in temp:
         t2 = ""
     else:
         t2 += char
+temp1.append([t1, t2])
 temp2 = []
 for el in temp1:
     temp2.append([el[0], el[1][1:-2].split(" ")])
+
+print(temp2)
 
 svg_path1 = temp2
 
@@ -92,18 +97,40 @@ for el in svg_path1:
     for e in el[1]:
         svg1 += "{} ".format(e)
 
-svg2 = ""
-svg_path2 = machining.offset_curve(svg_path1, 10, 'inside')[0]
-print("""
-------------------
-""")
-for el in svg_path2:
-    print(el)
-    svg2 += "{} ".format(el[0])
-    for e in el[1]:
-        svg2 += "{} ".format(e)
+# svg2 = ""
+# svg_path2 = machining.offset_curve(svg_path1, 10, 'inside')[0]
+# print("""
+# ------------------
+# """)
+# for el in svg_path2:
+#     print(el)
+#     svg2 += "{} ".format(el[0])
+#     for e in el[1]:
+#         svg2 += "{} ".format(e)
+
+svg_paths = [machining.offset_curve(svg_path1, 5 * i, 'inside') for i in range(1, 4)]
+for paths in svg_paths:
+    print(len(paths))
+    for profile in paths:
+        temp = ""
+        for el in profile:
+            temp += "{} ".format(el[0])
+            for e in el[1]:
+                temp += "{} ".format(e)
+        dwg.add(dwg.path(temp).stroke(color = 'black', width = 0.2).fill("none"))
+
+# svg_path = machining.offset_curve(svg_path1, 4, 'inside')
+# for i in range(0, 12):
+#     temp = ""
+#     for el in svg_path[0]:
+#         temp += "{} ".format(el[0])
+#         for e in el[1]:
+#             temp += "{} ".format(e)
+#     dwg.add(dwg.path(temp).stroke(color = 'black', width = 0.2).fill("none"))
+#     print("izi")
+#     svg_path = machining.offset_curve(svg_path[0], 4, 'inside')
 
 dwg.add(dwg.path(svg1).stroke(color = 'black', width = 0.2).fill("none"))
-dwg.add(dwg.path(svg2).stroke(color = 'black', width = 0.2).fill("none"))
+# dwg.add(dwg.path(svg2).stroke(color = 'black', width = 0.2).fill("none"))
 
 dwg.save()

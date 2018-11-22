@@ -557,7 +557,9 @@ class Machining:
         if direction == "inside":
             od = -od
         raw_offset = []
-        for i in range(0, len(profile)):
+        # for i in range(0, len(profile)):
+        i = 0
+        while i < len(profile):
             # for each node, determine the angle between both incoming and outing tangent
             pc = profile[(i - 1)%len(profile)] # previous curve
             c = profile[i] # curve
@@ -566,20 +568,40 @@ class Machining:
             # for the next points, it's a bit different : if the curve is a line, we just have to use its ending point.
             # However, if the curve is an arc, we have to use the tangent of the curve...
             # (for pc : the qestion is if the current curve is an arc or a line) (this paragraph is a pure mindf**k)
-            if nc[0] in ['M', 'L']:
-                np = self.get_point_from_curve(nc)
-            else:
-                np = self.get_point_tangent_arc(nc, p, 'start')
+            if self.get_point_from_curve(c) == self.get_point_from_curve(nc): # the next line / arc is of length 0 -> drop it like it's hot (or it's gonna inject a huge pile of shit in the system)
+                del profile[(i + 1) % len(profile)]
+                nc = profile[(i + 1)%len(profile)] # next curve
+
+            if self.get_point_from_curve(c) == self.get_point_from_curve(pc): # the line / arc is of length 0
+                del profile[i]
+                if i < len(profile):
+                    # we directly go to the next element
+                    pc = profile[(i - 1)%len(profile)] # previous curve
+                    c = profile[i] # curve
+                    nc = profile[(i + 1)%len(profile)] # next curve
+                    p = self.get_point_from_curve(c) # point
+                else:
+                    # we leave the loop
+                    break
             if c[0] in ['M', 'L']:
                 pp = self.get_point_from_curve(pc)
             else:
                 pp = self.get_point_tangent_arc(c, self.get_point_from_curve(pc), 'end')
+            if nc[0] in ['M', 'L']:
+                np = self.get_point_from_curve(nc)
+            else:
+                np = self.get_point_tangent_arc(nc, p, 'start')
             # we define two vectors : u is the vector p-pp, v is the vector p-np
             u = [pp[0] - p[0], pp[1] - p[1]]
             v = [np[0] - p[0], np[1] - p[1]]
             u_len = math.sqrt(u[0]**2 + u[1]**2)
             v_len = math.sqrt(v[0]**2 + v[1]**2)
-            angle = math.acos((u[0] * v[0] + u[1] * v[1]) / (u_len * v_len))
+            if (u[0] * v[0] + u[1] * v[1]) / (u_len * v_len) > 1: # avoid the case when float precision puts this value above 1 (not in the definition domain of acos)
+                angle = 0
+            if (u[0] * v[0] + u[1] * v[1]) / (u_len * v_len) < -1: # same, but for the case when float precision puts this value below -1
+                angle = math.pi
+            else:
+                angle = math.acos((u[0] * v[0] + u[1] * v[1]) / (u_len * v_len))
             # now we have the angle between the two vectors. To know if the oriented angle is this one or 2*PI - angle, we have to check for this sub_profile's direction.
             # easy my friend : we calculate its clockwise value and check if it's equal to cw.
             # sub_cw = (p[0] - cpp[0]) * (p[1] + cpp[1]) + (cnp[0] - p[0]) * (cnp[1] + p[1]) + (cpp[0] - cnp[0]) * (cpp[1] + cnp[1])
@@ -621,6 +643,7 @@ class Machining:
                     raw_offset.append(['A', [abs(c[1][0] + radius_dir * r), abs(c[1][1] + radius_dir * r), c[1][2], c[1][3], c[1][4], ax, ay]])
                 else:
                     raw_offset.append([c[0], [ax, ay]])
+            i += 1
         # we defined a closed loop. to use it as an SVG, we have to add a 'M' element at the beginning, that will point to the last point
         raw_offset.insert(0, ['M', self.get_point_from_curve(raw_offset[-1])])
         # now, we break the profile in several sub_profile, breaking points are each auto-intersection point
@@ -655,7 +678,7 @@ class Machining:
                     if profile[i][0] in ['L']:
                         j = i + 1
                         while j < len(profile) and collision == False:
-                            if profile[i][0] in ['L']:
+                            if profile[j][0] in ['L']:
                                 previous_i = (i - 1) % len(profile)
                                 previous_j = (j - 1) % len(profile)
                                 s1 = self.get_point_from_curve(profile[previous_i])
@@ -669,10 +692,10 @@ class Machining:
                                     temp = profile[:i + 1] + profile[j:]
                                     temp[i][1] = [intersect[0], intersect[1]]
                                     result[k] = temp
-                                    # second : add an 'M' movement to the beginning of the path, and end the last element (index j-i) at the intersection point
+                                    # second : add an 'M' movement to the beginning of the path, and end the last element at the intersection point
                                     temp2 = profile[i:j + 1]
-                                    temp2[j-i] = temp2[j-i].copy() # Necessary, to avoid modifying the other profile (python works with references, not copies of the lists) (man, it took me so long to spot this s**t...)
-                                    temp2[j-i][1] = [intersect[0], intersect[1]]
+                                    temp2[-1] = temp2[-1].copy() # Necessary, to avoid modifying the other profile (python works with references, not copies of the lists) (man, it took me so long to spot this s**t...)
+                                    temp2[-1][1] = [intersect[0], intersect[1]]
                                     temp2.insert(0, ['M', [intersect[0], intersect[1]]])
                                     result.append(temp2)
                             j += 1
